@@ -46,7 +46,8 @@ struct __attribute__ ((__packed__))  NetReq {
     int64_t        reqID;
     int32_t        train;        // [0, 5000)
     int16_t        start;        // [0, 10)
-    int16_t        length;    // [1, 10]
+    //int16_t        length;    // [1, 10]
+    int16_t        stop;
 };
 
 struct __attribute__ ((__packed__))  NetResp {
@@ -88,7 +89,8 @@ struct TicketSpace {
         if (ml > max_length) {
             ml = max_length;
         }
-        req->length = (e() % ml) + 1;
+        int length = (e() % ml) + 1;
+        req->stop = req->start + length;
     }
 };
 
