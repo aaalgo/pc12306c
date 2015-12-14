@@ -70,6 +70,7 @@ struct NetStat {
     NetStat (): req(nullptr), resp(nullptr), sid(-1) {
     }
 
+    // in seconds
     double latency () const {
         double ss = resp_ts.tv_sec - req_ts.tv_sec;
         ss += (resp_ts.tv_usec - req_ts.tv_usec) / 1000000.0;
@@ -106,6 +107,7 @@ struct TicketSpace {
         req->stop = req->start + length;
     }
 
+    // SID uniquely identify (train, seat, segment) triplet
     int make_sid (int train, int seat, int segment) const {
         return (train * seats + seat) * segments + segment;
     }
@@ -115,7 +117,7 @@ struct TicketSpace {
     }
 };
 
-enum {
+enum {  // performance counters
     CNT_SEND = 0,
     CNT_RECV,
     CNT_SUCC,
@@ -127,8 +129,6 @@ typedef array<size_t, CNT_NUM> Counters;
 class Client: public vector<NetStat> {
 
     TicketSpace ts;
-    string server;
-    short port;
     int sockfd;
     bool done;  // stop flag, reader/writer will
                 // stop when done becomes true
@@ -264,6 +264,8 @@ void count_all (vector<Client> const &clients, Counters *p) {
     *p = total;
 }
 
+// print performance counters every cycle seconds
+// stop when *stop becomes true
 void monitor_throughput (vector<Client> const *clients, float cycle, bool *stop) {
     Counters old;
     count_all(*clients, &old);
@@ -282,7 +284,10 @@ void monitor_throughput (vector<Client> const *clients, float cycle, bool *stop)
     }
 }
 
-class Signal {
+// MUST BE SINGLETON
+// handle signals during the life cycle of this object
+// when signal received, stop clients
+class Signal {  
     static vector<Client> *clients;
     static void stop_all (int) {
         if (clients) {
@@ -329,7 +334,7 @@ int main (int argc, char *argv[]) {
     (",N", po::value(&N)->default_value(10000000), "queries per client")
     (",T", po::value(&T)->default_value(2), "number parallel clients")
     (",B", po::value(&B)->default_value(1), "request batch size")
-    ("cycle", po::value(&cycle)->default_value(1), "throughput print cycle in seconds")
+    ("cycle", po::value(&cycle)->default_value(1), "print counters every cycle seconds")
     ;
 
     po::positional_options_description p;
@@ -350,6 +355,7 @@ int main (int argc, char *argv[]) {
     {
         auto_cpu_timer timer(cerr);
         cerr << "Generating queries..." << endl;
+        // this is not efficient when # clients < # available OMP threads
 #pragma omp parallel
         {
             int seed = 0;
@@ -379,8 +385,8 @@ int main (int argc, char *argv[]) {
             client.join();
         }
         if (clients.empty()) {
-            cerr << "No clients running, sleep 100s for testing..." << endl;
-            sleep(100); // if no clients, sleep 100s for testing.
+            cerr << "No clients running, sleep 10s for testing..." << endl;
+            sleep(10); // if no clients, sleep 00s for testing.
         }
         stop_monitor = true;
         asm volatile("": : :"memory");
