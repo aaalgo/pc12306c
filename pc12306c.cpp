@@ -8,11 +8,13 @@
 #include <iostream>
 #include <future>
 #include <string>
+#include <array>
 #include <vector>
 #include <stdexcept>
 #include <random>
 #include <chrono>
 #include <thread>
+#include <limits>
 #include <boost/program_options.hpp>
 #include <boost/timer/timer.hpp>
 #include <boost/accumulators/accumulators.hpp>
@@ -23,6 +25,7 @@
 #include <boost/accumulators/statistics/min.hpp>
 #include <boost/accumulators/statistics/max.hpp>
 #include <boost/accumulators/statistics/variance.hpp>
+#include <parallel/algorithm>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -31,11 +34,13 @@ using std::cout;
 using std::cerr;
 using std::endl;
 using std::string;
+using std::array;
 using std::vector;
 using std::future;
 using std::async;
 using std::launch;
 using std::runtime_error;
+using std::numeric_limits;
 using std::default_random_engine;
 using boost::timer::auto_cpu_timer;
 
@@ -46,7 +51,6 @@ struct __attribute__ ((__packed__))  NetReq {
     int64_t        reqID;
     int32_t        train;        // [0, 5000)
     int16_t        start;        // [0, 10)
-    //int16_t        length;    // [1, 10]
     int16_t        stop;
 };
 
@@ -61,8 +65,9 @@ struct NetStat {
     struct timeval resp_ts;
     NetReq const *req;
     NetResp const *resp;
+    int sid;    // global seat id, == (train * tspace.seats + resp.seat) * segments + segment
 
-    NetStat (): req(nullptr), resp(nullptr) {
+    NetStat (): req(nullptr), resp(nullptr), sid(-1) {
     }
 
     double latency () const {
@@ -78,6 +83,14 @@ struct TicketSpace {
     int seats;
     int max_length;
 
+    void check_size () {
+        int64_t v = 1;
+        v *= trains;
+        v *= segments;
+        v *= max_length;
+        BOOST_VERIFY(v <= numeric_limits<int>::max());
+    }
+
     // generate one random request
     template <typename RANDOM_ENGINE>
     void sample (RANDOM_ENGINE &e, NetReq *req) const {
@@ -92,7 +105,24 @@ struct TicketSpace {
         int length = (e() % ml) + 1;
         req->stop = req->start + length;
     }
+
+    int make_sid (int train, int seat, int segment) const {
+        return (train * seats + seat) * segments + segment;
+    }
+
+    int total_sids () const {
+        return trains * seats * segments;
+    }
 };
+
+enum {
+    CNT_SEND = 0,
+    CNT_RECV,
+    CNT_SUCC,
+    CNT_NUM
+};
+
+typedef array<size_t, CNT_NUM> Counters;
 
 class Client: public vector<NetStat> {
 
@@ -102,8 +132,8 @@ class Client: public vector<NetStat> {
     int sockfd;
     bool done;  // stop flag, reader/writer will
                 // stop when done becomes true
-    size_t n_send;
-    size_t n_recv;
+    size_t batch;
+    Counters counters;
     future<void> rfuture;
     future<void> wfuture;
 
@@ -123,20 +153,31 @@ class Client: public vector<NetStat> {
             auto &st = at(resp.reqID);
             st.resp = &resp;
             st.resp_ts = tv;
-            ++n_recv;
+            ++counters[CNT_RECV];
+            if (resp.seat >= 0) {
+                ++counters[CNT_SUCC];
+                st.sid = ts.make_sid(st.req->train, resp.seat, st.req->start);
+            }
         }
     }
 
     void writer () {
-        for (unsigned i = 0; i < reqs.size(); ++i) {
+        for (unsigned i = 0; i < reqs.size(); i += batch) {
+            // i is batch start
             if (done) break;
-            auto const &req = reqs[i];
-            auto &st = at(i);
-            st.req = &req;
-            gettimeofday(&st.req_ts, NULL);
-            ssize_t sz = send(sockfd, reinterpret_cast<char const *>(&req), sizeof(req), 0);
-            if (sz != sizeof(req)) throw runtime_error("error sending");
-            ++n_send;
+            struct timeval ts;
+            gettimeofday(&ts, NULL);
+            unsigned n = reqs.size() - i;
+            if (n > batch) n = batch;
+            for (unsigned j = i; j < i + n; ++j) {
+                auto const &req = reqs[j];
+                auto &st = at(j);
+                st.req_ts = ts;
+                st.req = &req;
+            }
+            ssize_t sz = send(sockfd, reinterpret_cast<char const *>(&reqs[i]), sizeof(NetReq) * n, 0);
+            if (sz != sizeof(NetReq) * n) throw runtime_error("error sending");
+            ++counters[CNT_SEND];
         }
         done = true;
     }
@@ -144,12 +185,17 @@ class Client: public vector<NetStat> {
 
 public:
     Client ()
-        : sockfd(-1), done(false), n_send(0), n_recv(0)
+        : sockfd(-1), done(false), batch(1)
     {
+        counters.fill(0);
     }
 
     ~Client () {
         BOOST_VERIFY(sockfd < 0);
+    }
+
+    void setBatch (size_t b) {
+        batch = b;
     }
 
     // pre-generate random queries
@@ -200,41 +246,39 @@ public:
         sockfd = -1;
     }
 
-    size_t getSendCount () const {
-        return n_send;
-    }
-
-    size_t getRecvCount () const {
-        return n_recv;
+    void getCounters (Counters *c) const {
+        *c = counters;
     }
 };
 
-void count_send_recv (vector<Client> const *clients, size_t *n_send, size_t *n_recv) {
-    size_t s = 0, r = 0;
-    for (auto const &c: *clients) {
-        s += c.getSendCount();
-        r += c.getRecvCount();
+void count_all (vector<Client> const &clients, Counters *p) {
+    Counters total;
+    total.fill(0);
+    for (auto const &c: clients) {
+        Counters cnts;
+        c.getCounters(&cnts);
+        for (unsigned i = 0; i < total.size(); ++i) {
+            total[i] += cnts[i];
+        }
     }
-    *n_send = s;
-    *n_recv = r;
+    *p = total;
 }
 
 void monitor_throughput (vector<Client> const *clients, float cycle, bool *stop) {
-
-    size_t o_send = 0, o_recv = 0;
-    count_send_recv(clients, &o_send, &o_recv);
+    Counters old;
+    count_all(*clients, &old);
     std::chrono::milliseconds delta(int(cycle * 1000));
     auto next = std::chrono::system_clock::now() + delta;
     while (!*stop) {
-        size_t n_send, n_recv;
         std::this_thread::sleep_until(next);
         next += delta;
-        count_send_recv(clients, &n_send, &n_recv);
-        cerr << "send: " << (n_send - o_send)
-             << " recv: " << (n_recv - o_recv)
+        Counters cnts;
+        count_all(*clients, &cnts);
+        cerr << "send: " << (cnts[CNT_SEND] - old[CNT_SEND])
+             << " recv: " << (cnts[CNT_RECV] - old[CNT_RECV])
+             << " succ: " << (cnts[CNT_SUCC] - old[CNT_SUCC])
              << endl;
-        o_send = n_send;
-        o_recv = n_recv;
+        old = cnts;
     }
 }
 
@@ -257,6 +301,8 @@ public:
 
     ~Signal () {
         clients = nullptr;
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
     }
 };
 
@@ -268,7 +314,7 @@ int main (int argc, char *argv[]) {
     TicketSpace tspace;
     string server;
     short port;
-    size_t N, T;
+    size_t N, T, B;
     float cycle;
 
     po::options_description desc("Allowed options");
@@ -280,10 +326,10 @@ int main (int argc, char *argv[]) {
     ("segments", po::value(&tspace.segments)->default_value(10), "")
     ("seats", po::value(&tspace.seats)->default_value(3000), "")
     ("max-length", po::value(&tspace.max_length)->default_value(5), "")
-    (",N", po::value(&N)->default_value(100000000), "queries per client")
+    (",N", po::value(&N)->default_value(10000000), "queries per client")
     (",T", po::value(&T)->default_value(2), "number parallel clients")
+    (",B", po::value(&B)->default_value(1), "request batch size")
     ("cycle", po::value(&cycle)->default_value(1), "throughput print cycle in seconds")
-    ("help", "")
     ;
 
     po::positional_options_description p;
@@ -295,8 +341,10 @@ int main (int argc, char *argv[]) {
 
     if (vm.count("help")) {
         cerr << desc;
-        return 1;
+        return 0;
     }
+
+    tspace.check_size();
     
     vector<Client> clients(T);
     {
@@ -316,37 +364,92 @@ int main (int argc, char *argv[]) {
         }
     }
 
-    cerr << "Starting clients..." << endl;
-    Signal signal(&clients);
-    for (auto &client: clients) {
-        client.start(server, port);
+    {
+        cerr << "Starting clients, interrupt with Ctrl+C..." << endl;
+        Signal signal(&clients);
+        auto_cpu_timer timer(cerr);
+        for (auto &client: clients) {
+            client.setBatch(B);
+            client.start(server, port);
+        }
+        bool stop_monitor = false;
+        future<void> ft = async(launch::async, monitor_throughput, &clients, cycle, &stop_monitor);
+        // wait for clients
+        for (auto &client: clients) {
+            client.join();
+        }
+        if (clients.empty()) {
+            cerr << "No clients running, sleep 100s for testing..." << endl;
+            sleep(100); // if no clients, sleep 100s for testing.
+        }
+        stop_monitor = true;
+        asm volatile("": : :"memory");
+        // wait for throughput monitor
+        ft.get();
     }
-    bool stop_monitor = false;
-    asm volatile("": : :"memory");
-    future<void> ft = async(launch::async, monitor_throughput, &clients, cycle, &stop_monitor);
-    // wait for clients
-    for (auto &client: clients) {
-        client.join();
-    }
-    stop_monitor = true;
-    asm volatile("": : :"memory");
-    // wait for throughput monitor
-    ft.get();
 
     // do statistics
+    Counters cnts;
+    count_all(clients, &cnts);
+    cerr << "send: " << cnts[CNT_SEND] << endl;
+    cerr << "received: " << cnts[CNT_RECV] << endl;
+    cerr << "success: " << cnts[CNT_SUCC] << endl;
     Acc acc;
     for (auto const &client: clients) {
         for (NetStat const &st: client) {
             if (!st.req) continue;
             if (!st.resp) continue;
-            acc(st.latency());
+            acc(st.latency()); // in seconds
         }
     }
-    cout << "mean: " << ba::mean(acc) << endl;
-    cout << "std: " << sqrt(ba::variance(acc)) << endl;
-    cout << "min: " << ba::min(acc) << endl;
-    cout << "max: " << ba::max(acc) << endl;
-    cout << "count: " << ba::count(acc) << endl;
+    cout << "latency.mean: " << ba::mean(acc) * 1000 << " ms" << endl;
+    cout << "latency.std: " << sqrt(ba::variance(acc)) * 1000 << " ms" << endl;
+    cout << "latency.min: " << ba::min(acc) * 1000  << " ms" << endl;
+    cout << "latency.max: " << ba::max(acc) * 1000 << " ms" << endl;
+    cout << "latency.count: " << ba::count(acc) << endl;
+    // the array of tickets assigned to each seat
+    vector<NetStat const *> v;
+    size_t asked = 0;
+    size_t sold = 0;
+    //v.reserve(tspace.total_sids());
+    for (auto const &client: clients) {
+        for (auto const &st: client) {
+            if (st.req) {
+                ++asked;
+                if (st.sid >= 0) {
+                    v.push_back(&st);
+                    sold += st.req->stop - st.req->start;
+                }
+            }
+        }
+    }
+    cout << "fill.rate: " <<  1.0 * sold / tspace.total_sids() << "    (rate of inventory sold)" << endl;
+    cout << "fulfill.rate: " <<  1.0 * v.size() / asked << "     (rate of reqs satisfied)" << endl;
+    // detect conflicts
+    __gnu_parallel::sort(v.begin(), v.end(),
+                [](NetStat const *p1, NetStat const *p2) {
+                    return p1->sid < p2->sid;
+                });
+    // verify no overlap
+    size_t conflict = 0;
+    for (unsigned i = 1; i < v.size(); ++i) {
+        if (v[i-1]->req->train != v[i]->req->train) continue;
+        if (v[i-1]->resp->seat != v[i]->resp->seat) continue;
+        // same seat on same train, detect conflict
+        if (v[i-1]->req->stop >= v[i]->req->start) {
+            /*
+            cout << "conflict: "
+                << v[i-1]->resp->reqID << '.'
+                << v[i-1]->resp->respID
+                << " and "
+                << v[i]->resp->reqID << '.'
+                << v[i]->resp->respID
+                << endl;
+            */
+            ++conflict;
+        }
+    }
+    cout << "conflict: " << conflict << endl;
 
     return 0;
 }

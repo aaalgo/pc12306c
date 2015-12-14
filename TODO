@@ -1,0 +1,3 @@
+- Pre-allocating requests not memory-efficient.
+- Pre-computing requests not efficient.
+- Need to check correct ticket allocation: if some request fails, subsequent requests of a contained segmnet interval shouldn't succeed.
