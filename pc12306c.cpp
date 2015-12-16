@@ -370,7 +370,7 @@ int main (int argc, char *argv[]) {
     TicketSpace tspace;
     string server;
     unsigned short port;
-    size_t N, T, B, Q, S;
+    size_t N, C, B, Q, S;
     float cycle;
 
     po::options_description desc("Allowed options");
@@ -383,9 +383,9 @@ int main (int argc, char *argv[]) {
     ("seats", po::value(&tspace.seats)->default_value(3000), "")
     ("max-length", po::value(&tspace.max_length)->default_value(5), "")
     (",N", po::value(&N)->default_value(10000000), "queries per client")
-    (",T", po::value(&T)->default_value(4), "number parallel clients")
+    (",C", po::value(&C)->default_value(4), "number parallel clients")
     (",B", po::value(&B)->default_value(20), "request batch size")
-    (",Q", po::value(&Q)->default_value(1000), "")
+    (",Q", po::value(&Q)->default_value(1000), "maximal outstanding request per client")
     (",S", po::value(&S)->default_value(100), "if queue is fall, sleep this # us")
     ("cycle", po::value(&cycle)->default_value(1), "print counters every cycle seconds")
     ;
@@ -404,7 +404,7 @@ int main (int argc, char *argv[]) {
 
     tspace.check_size();
     
-    vector<Client> clients(T);
+    vector<Client> clients(C);
     {
         auto_cpu_timer timer(cout);
         cout << "Generating queries..." << endl;
