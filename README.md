@@ -32,8 +32,10 @@ Explanation of some parameters:
   so total thread number is 2C.
 - B: fit multiple requests into a single send request might increase
   throughput.
+  (With 1GB ethernet, it seems B doesn't help much in improving throughput.)
 - Q: this is to preventing sending out too many requests before they
-  can be processed by server.
+  can be processed by server. If outstanding query + B >= Q, the writing
+  thread will sleep S us and try again.
 
 ## Performance Measures
 
