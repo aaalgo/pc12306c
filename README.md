@@ -4,6 +4,10 @@ Auther: Wei Dong wdong@wdong.org
 
 This is a stress test client of https://github.com/weiqj/pc12306.
 
+## Building
+
+The code depends on a C++11 compiler and the Boost library.
+
 ## Command line parameters
 
 ```
