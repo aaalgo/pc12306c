@@ -211,7 +211,7 @@ public:
         }
     }
 
-    void start (string const &server, short port) {
+    void start (string const &server, unsigned short port) {
         struct sockaddr_in serv_addr;
         struct hostent *ent;
 
@@ -225,7 +225,7 @@ public:
         bcopy((char *)ent->h_addr, 
              (char *)&serv_addr.sin_addr.s_addr,
              ent->h_length);
-        serv_addr.sin_port = port;
+        serv_addr.sin_port = htons(port);
 
         sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (sockfd < 0) 
@@ -318,7 +318,7 @@ int main (int argc, char *argv[]) {
     namespace po = boost::program_options; 
     TicketSpace tspace;
     string server;
-    short port;
+    unsigned short port;
     size_t N, T, B;
     float cycle;
 

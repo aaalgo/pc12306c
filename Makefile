@@ -1,4 +1,4 @@
-CXXFLAGS +=-std=c++11 -O3 -pthread -fopenmp -g
+CXXFLAGS +=-std=c++11 -O3 -pthread -fopenmp -g 
 LDFLAGS += -pthread -fopenmp
 LDLIBS += -lboost_timer -lboost_chrono -lboost_system -lboost_program_options 
 
