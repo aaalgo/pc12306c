@@ -39,7 +39,9 @@ respID has arrived before a smaller respID.
 - fill.rate: the server keeps the state across multiple invocation of
 the client.  This value is meaningful only on the first invocation of
 client after server restart, because subsequent invocations of client
-have no means to track how many seats were sold before.
+have no means to track how many seats were sold before. This value of
+the first N invocation of client can be added up for the total rate of
+seats sold.
 
 ## Known Issues
 
