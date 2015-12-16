@@ -244,7 +244,7 @@ public:
     void generate (TicketSpace ts, size_t n, RANDOM_ENGINE &e) {
         reqs.resize(n);
         resps.resize(n);
-        resize(n);
+        resize(n, NetStat());
         for (unsigned i = 0; i < reqs.size(); ++i) {
             auto &req = reqs[i];
             req.reqID = i;
@@ -464,6 +464,9 @@ int main (int argc, char *argv[]) {
         for (NetStat const &st: client) {
             if (!st.req) continue;
             if (!st.resp) continue;
+            if (st.resp->respID < 0) {
+                cerr << "respID overflow." << endl;
+            }
             acc(st.latency()); // in seconds
             ++asked;
             if (st.sid >= 0) {
@@ -487,6 +490,11 @@ int main (int argc, char *argv[]) {
     {
         double max_ood = 0;
         for (unsigned i = 1; i < v.size(); ++i) {
+            auto prev = v[i-1]->resp->respID;
+            auto cur = v[i]->resp->respID;
+            if (prev >= cur) {
+                cerr << "respID: " << prev << ", " << cur << endl;
+            }
             double ood = time_diff(v[i-1]->resp_ts, v[i]->resp_ts);
             if (ood > max_ood) {
                 max_ood = ood;
@@ -503,11 +511,14 @@ int main (int argc, char *argv[]) {
         // elemnet (a, b) = number of times a request [a, b] as failed.
         for (NetStat const *p: v) {
             // this test is train specific
+            BOOST_VERIFY(p->req->train < tspace.trains);
             auto &matrix = failed[p->req->train];
             int a = p->req->start;
             int b = p->req->stop-1; // the stop segment is not included as part of the request
                                     // it is always true that stop >= start + 1
                                     // so it's always that b >= a
+            BOOST_VERIFY(a >= 0 && a < tspace.segments);
+            BOOST_VERIFY(b >= a && b < tspace.segments);
             // the segment matrix is a upper-right triangle matrix
             if (p->sid < 0) {
                 matrix(a, b) += 1;
@@ -529,11 +540,18 @@ int main (int argc, char *argv[]) {
 
     // remove all failed transactions
     {
-        vector<NetStat const *> v2;
-        for (NetStat const *p: v) {
-            if (p->sid >= 0) v2.push_back(p);
+        unsigned i = 0;
+        unsigned sz = v.size();
+        while (i < sz) {
+            if (v[i]->sid < 0) {
+                v[i] = v[sz-1]; // replace v[i] with last element
+                --sz;
+            }
+            else {
+                ++i;
+            }
         }
-        v.swap(v2);
+        v.resize(sz);
     }
     
     // detect conflicts 2
@@ -561,6 +579,6 @@ int main (int argc, char *argv[]) {
         }
     }
     cout << "conflict2: " << conflict2 << "    (seats are sold twice)" << endl;
-
     return 0;
 }
+
