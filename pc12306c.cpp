@@ -131,6 +131,8 @@ enum {  // performance counters
     CNT_SEND = 0,
     CNT_RECV,
     CNT_SUCC,
+    CNT_SEND_BYTE,
+    CNT_RECV_BYTE,
     CNT_NUM
 };
 
@@ -177,6 +179,7 @@ class Client: public vector<NetStat> {
             if (done) break;
             struct timeval tv;
             recv_all(sockfd, reinterpret_cast<char *>(&resp), sizeof(resp));
+            pcounters[CNT_RECV_BYTE] += sizeof(resp);
             gettimeofday(&tv, NULL);
             if (resp.reqID < 0 || resp.reqID >= size()) {
                 throw runtime_error("bad server response");
@@ -211,6 +214,7 @@ class Client: public vector<NetStat> {
             }
             send_all(sockfd, reinterpret_cast<char const *>(&reqs[i]), sizeof(NetReq) * n);
             pcounters[CNT_SEND] += batch;
+            pcounters[CNT_SEND_BYTE] += sizeof(NetReq) * n;
         }
         done = true;
     }
@@ -320,16 +324,23 @@ void monitor_throughput (vector<Client> const *clients, float cycle, bool *stop)
     std::chrono::milliseconds delta(int(cycle * 1000));
     auto next = std::chrono::system_clock::now() + delta;
     cout << "Reporting throughput every " << cycle << " seconds..." << endl;
-    cout << "Mtps ==  million transactions per second" << endl;
+    cout << "Mt/s ==  million transactions per second" << endl;
+    cout << "MB/s ==  1024x1024 bytes per second" << endl;
+    cout.setf(std::ios::fixed);
+    cout.precision(5);
+    double MB = 1024*1024;
     while (!*stop) {
         std::this_thread::sleep_until(next);
         next += delta;
         Counters cnts;
         count_all(*clients, &cnts);
-        cout << "Mtps "
+        cout << "Mt/s "
              << "send: " << (cnts[CNT_SEND] - old[CNT_SEND]) / cycle / 1000000.0
              << " receive: " << (cnts[CNT_RECV] - old[CNT_RECV]) / cycle / 1000000.0
-             << " succeed: " << (cnts[CNT_SUCC] - old[CNT_SUCC]) / cycle / 1000000.0
+             << " succeed: " << (cnts[CNT_SUCC] - old[CNT_SUCC]) / cycle / 1000000.0;
+        cout << "    MB/s "
+             << "send: " << (cnts[CNT_SEND_BYTE] - old[CNT_SEND_BYTE]) / MB
+             << " receive: " << (cnts[CNT_RECV_BYTE] - old[CNT_RECV_BYTE]) / MB
              << endl;
         old = cnts;
     }

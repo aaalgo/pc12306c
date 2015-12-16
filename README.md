@@ -36,6 +36,10 @@ Explanation of some parameters:
 - Q: this is to preventing sending out too many requests before they
   can be processed by server. If outstanding query + B >= Q, the writing
   thread will sleep S us and try again.
+- N: this program pre-allocate memory for all requests and responses.
+  For N=10000000 and C=4 (default), the maximal resident set size of the
+  program is about 4GB.  The memory consumption is proportional to NxC.
+
 
 ## Performance Measures
 
