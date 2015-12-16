@@ -130,10 +130,14 @@ class Client: public vector<NetStat> {
 
     TicketSpace ts;
     int sockfd;
-    bool done;  // stop flag, reader/writer will
+    bool volatile done;  // stop flag, reader/writer will
                 // stop when done becomes true
     size_t batch;
+    size_t queue;
+    size_t sleep;
     Counters counters;
+    size_t volatile *pcounters;
+
     future<void> rfuture;
     future<void> wfuture;
 
@@ -153,9 +157,9 @@ class Client: public vector<NetStat> {
             auto &st = at(resp.reqID);
             st.resp = &resp;
             st.resp_ts = tv;
-            ++counters[CNT_RECV];
+            ++pcounters[CNT_RECV];
             if (resp.seat >= 0) {
-                ++counters[CNT_SUCC];
+                ++pcounters[CNT_SUCC];
                 st.sid = ts.make_sid(st.req->train, resp.seat, st.req->start);
             }
         }
@@ -163,6 +167,9 @@ class Client: public vector<NetStat> {
 
     void writer () {
         for (unsigned i = 0; i < reqs.size(); i += batch) {
+            while ((pcounters[CNT_SEND] + batch - pcounters[CNT_RECV] >= queue) && (!done)) {
+                usleep(sleep);
+            }
             // i is batch start
             if (done) break;
             struct timeval ts;
@@ -177,7 +184,7 @@ class Client: public vector<NetStat> {
             }
             ssize_t sz = send(sockfd, reinterpret_cast<char const *>(&reqs[i]), sizeof(NetReq) * n, 0);
             if (sz != sizeof(NetReq) * n) throw runtime_error("error sending");
-            ++counters[CNT_SEND];
+            pcounters[CNT_SEND] += batch;
         }
         done = true;
     }
@@ -185,7 +192,7 @@ class Client: public vector<NetStat> {
 
 public:
     Client ()
-        : sockfd(-1), done(false), batch(1)
+        : sockfd(-1), done(false), batch(1), queue(100), sleep(100), pcounters(&counters[0])
     {
         counters.fill(0);
     }
@@ -196,6 +203,14 @@ public:
 
     void setBatch (size_t b) {
         batch = b;
+    }
+
+    void setQueue (size_t q) {
+        queue = q;
+    }
+
+    void setSleep (size_t s) {
+        sleep = s;
     }
 
     // pre-generate random queries
@@ -214,6 +229,8 @@ public:
     void start (string const &server, unsigned short port) {
         struct sockaddr_in serv_addr;
         struct hostent *ent;
+
+        BOOST_VERIFY(batch < queue);
 
         bzero((char *) &serv_addr, sizeof(serv_addr));
 
@@ -319,7 +336,7 @@ int main (int argc, char *argv[]) {
     TicketSpace tspace;
     string server;
     unsigned short port;
-    size_t N, T, B;
+    size_t N, T, B, Q, S;
     float cycle;
 
     po::options_description desc("Allowed options");
@@ -334,6 +351,8 @@ int main (int argc, char *argv[]) {
     (",N", po::value(&N)->default_value(10000000), "queries per client")
     (",T", po::value(&T)->default_value(2), "number parallel clients")
     (",B", po::value(&B)->default_value(1), "request batch size")
+    (",Q", po::value(&Q)->default_value(1000), "")
+    (",S", po::value(&S)->default_value(100), "if queue is fall, sleep this # us")
     ("cycle", po::value(&cycle)->default_value(1), "print counters every cycle seconds")
     ;
 
@@ -376,6 +395,7 @@ int main (int argc, char *argv[]) {
         auto_cpu_timer timer(cerr);
         for (auto &client: clients) {
             client.setBatch(B);
+            client.setQueue(Q);
             client.start(server, port);
         }
         bool stop_monitor = false;
