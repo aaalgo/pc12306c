@@ -1,6 +1,6 @@
 # pc12306c
 
-Auther: Wei Dong wdong@wdong.org
+Author: Wei Dong wdong@wdong.org
 
 This is a stress test client of https://github.com/weiqj/pc12306.
 
