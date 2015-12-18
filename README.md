@@ -8,6 +8,13 @@ This is a stress test client of https://github.com/weiqj/pc12306.
 
 The code depends on a C++11 compiler and the Boost library.
 
+### MPI Version
+
+The program pc12306c-mpi.cpp is almost the same as pc12306c.cpp
+except for MPI support.  A MPI_Barrier is used so that all
+clients start firing at the server at the same time.
+Use "make mpi" to compile.
+
 ## Command line parameters
 
 ```
