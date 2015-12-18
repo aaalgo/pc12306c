@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h> 
 #include <sys/time.h>
 #include <iostream>
@@ -258,20 +259,23 @@ public:
 
     void start (string const &server, unsigned short port) {
         struct sockaddr_in serv_addr;
-        struct hostent *ent;
 
         BOOST_VERIFY(batch < queue);
 
         bzero((char *) &serv_addr, sizeof(serv_addr));
 
-        ent = gethostbyname(server.c_str());
-        if (ent == NULL) {
-            throw runtime_error("ERROR, no such host");
-        }
         serv_addr.sin_family = AF_INET;
-        bcopy((char *)ent->h_addr, 
-             (char *)&serv_addr.sin_addr.s_addr,
-             ent->h_length);
+        if (inet_aton(server.c_str(), &serv_addr.sin_addr) == 0) {
+            // if fail, try to resolve hostname
+            struct hostent *ent;
+            ent = gethostbyname(server.c_str());
+            if (ent == NULL) {
+                throw runtime_error("ERROR, no such host");
+            }
+            bcopy((char *)ent->h_addr, 
+                 (char *)&serv_addr.sin_addr.s_addr,
+                 ent->h_length);
+        };
         serv_addr.sin_port = htons(port);
 
         sockfd = socket(AF_INET, SOCK_STREAM, 0);

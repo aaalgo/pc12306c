@@ -271,8 +271,7 @@ public:
         // try first assuming server is numeric IP
         // statically compiled binary won't able to resolve
         // hostname and has to use numeric IP as input.
-        serv_addr.sin_addr.s_addr = inet_addr(server.c_str());
-        if (serv_addr.sin_addr.s_addr == 0) {
+        if (inet_aton(server.c_str(), &serv_addr.sin_addr) == 0) {
             // if fail, try to resolve hostname
             struct hostent *ent;
             ent = gethostbyname(server.c_str());
