@@ -8,7 +8,7 @@ all:	pc12306c
 
 mpi:	pc12306c-mpi
 
-pc12306c-mpi:	pc12306-mpi.cpp
+pc12306c-mpi:	pc12306c-mpi.cpp
 	mpicxx -DUSE_MPI=1 $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS)
 
 clean:
